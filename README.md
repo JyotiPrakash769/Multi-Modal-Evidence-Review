@@ -77,7 +77,7 @@ The system must decide whether the submitted images **support** the user's claim
 
 ---
 
-## Part 2: How We Solved It
+## Part 2: How I Solved It
 
 ### Constraints We Faced
 
