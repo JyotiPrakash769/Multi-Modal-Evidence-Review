@@ -1,161 +1,98 @@
-# HackerRank Orchestrate
+# Multi-Modal Evidence Review — HackerRank Orchestrate
 
-Starter repository for the **HackerRank Orchestrate** 24-hour hackathon.
+A system that verifies visual evidence for damage claims (cars, laptops, packages) using chat transcripts, images, user history, and evidence requirements.
 
-Build a system that verifies visual evidence for damage claims across three object types: **cars**, **laptops**, and **packages**.
+Built for the **HackerRank Orchestrate** 24-hour hackathon (June 2026).
 
-Your system will receive claim conversations, one or more submitted images, user claim history, and minimum evidence requirements. It must decide whether the submitted images support the claim, contradict it, or do not provide enough information.
+## Our Approach
 
-Read [`problem_statement.md`](./problem_statement.md) for the full task spec, input/output schema, and allowed values.
+We use a **two-stage local pipeline** with Ollama because cloud API free tiers (Gemini, OpenRouter, Groq) were exhausted.
 
----
+### Stage 1 — Image Descriptions (moondream)
+For each claim, send each image individually to `moondream` (1B VLM) with a description prompt. Collects free-form text descriptions describing visible damage.
 
-## Contents
+### Stage 2 — Structured Analysis (gemma4:e4b)
+Build a text-only prompt with:
+- Image descriptions from Stage 1
+- Chat transcript
+- Evidence requirements
+- User history
+- Allowed value lists
 
-1. [Repository layout](#repository-layout)
-2. [What you need to build](#what-you-need-to-build)
-3. [Where your code goes](#where-your-code-goes)
-4. [Quickstart](#quickstart)
-5. [Evaluation](#evaluation)
-6. [Chat transcript logging](#chat-transcript-logging)
-7. [Submission](#submission)
-8. [Judge interview](#judge-interview)
+Send to `gemma4:e4b` (8B text LLM) which outputs structured JSON: `issue_type`, `object_part`, `claim_status`, `severity`.
 
----
+### Post-processing
+Fill remaining fields (`valid_image`, `evidence_standard_met`, `supporting_image_ids`, `risk_flags`) with rule-based defaults since the 8B model only outputs 4 fields reliably.
 
-## Repository layout
+## Architecture
 
-```text
-.
-├── AGENTS.md                         # Rules for AI coding tools + transcript logging
-├── problem_statement.md              # Full task description and I/O schema
-├── README.md                         # You are here
-├── code/                             # Build your solution here
-│   ├── main.py                       # Suggested terminal entry point
-│   └── evaluation/
-│       └── main.py                   # Suggested evaluation entry point
-└── dataset/
-    ├── sample_claims.csv             # Inputs + expected outputs for development
-    ├── claims.csv                    # Inputs only; run your system on these rows
-    ├── user_history.csv              # Historical claim counts and risk context
-    ├── evidence_requirements.csv     # Minimum image evidence requirements
-    └── images/
-        ├── sample/                   # Images referenced by sample_claims.csv
-        └── test/                     # Images referenced by claims.csv
+```
+├── code/
+│   ├── main.py                    # Entry point (two-pass pipeline)
+│   ├── pipeline/
+│   │   ├── gemini_client.py       # Multi-provider API + describe_images()
+│   │   ├── prompt_templates.py    # Prompt builders (cloud vs local)
+│   │   ├── postprocess.py         # Validation + intelligent defaults
+│   │   ├── schema.py              # Allowed values + output schema
+│   │   ├── data_loader.py         # CSV loading
+│   │   ├── evidence_lookup.py     # Evidence requirements
+│   │   └── history_lookup.py      # User history risk
+│   ├── evaluation/
+│   │   ├── main.py                # Evaluation runner
+│   │   ├── metrics.py             # Accuracy scoring
+│   │   └── evaluation_report.md   # Generated report
+│   └── README.md
+├── output.csv                     # Predictions for 44 claims
+├── chat_transcript.md             # Development conversation
+├── problem_statement.md           # Full task spec
+└── AGENTS.md                      # AI tool rules
 ```
 
----
+## Technologies Used
 
-## What you need to build
+| Technology | Purpose |
+|------------|---------|
+| Python 3.12 | Main language |
+| Ollama v0.20.2 | Local model server |
+| moondream (1B VLM) | Image description generation |
+| gemma4:e4b (8B LLM) | Structured claim analysis |
+| openai (Python lib) | OpenAI-compatible API calls |
+| Pillow | Image resizing (384px max for 4GB VRAM) |
+| pandas | CSV data loading |
+| RTX 3050 Ti (4GB) | Hardware (local inference) |
 
-A system that, for each row in `dataset/claims.csv`, produces one row in `output.csv`.
+## Performance
 
-Input fields:
+| Metric | Sample Claims (20) | Test Claims (44) |
+|--------|-------------------|------------------|
+| Runtime | ~141s | ~311s (5 min) |
+| Cost | $0 (local) | $0 (local) |
+| Claim Status Acc | 70% | - |
+| Object Part Acc | 90% | - |
+| Valid Image Acc | 90% | - |
 
-| Column | Meaning |
-|---|---|
-| `user_id` | User submitting the claim; use this to look up `dataset/user_history.csv` |
-| `image_paths` | One or more submitted image paths, separated by semicolons |
-| `user_claim` | Chat transcript describing the issue |
-| `claim_object` | `car`, `laptop`, or `package` |
-
-Required output fields:
-
-| Column | Meaning |
-|---|---|
-| `evidence_standard_met` | Whether the image set is sufficient to evaluate the claim |
-| `evidence_standard_met_reason` | Short reason for the evidence decision |
-| `risk_flags` | Semicolon-separated risk flags, or `none` |
-| `issue_type` | Visible issue type |
-| `object_part` | Relevant object part |
-| `claim_status` | `supported`, `contradicted`, or `not_enough_information` |
-| `claim_status_justification` | Concise explanation grounded in the image evidence |
-| `supporting_image_ids` | Image IDs supporting the decision, or `none` |
-| `valid_image` | Whether the image set is usable for automated review |
-| `severity` | `none`, `low`, `medium`, `high`, or `unknown` |
-
-Hard requirements:
-
-- Must read the provided CSV files and local images.
-- Must produce `output.csv` with the exact schema in `problem_statement.md`.
-- Must include an evaluation workflow
-- Must avoid hardcoded test labels or file-specific answers.
-
-Beyond that you are free to bring your own approach: VLMs, LLMs, structured prompting, rule layers, batching, caching, evaluation pipelines, model comparison, or anything else.
-
----
-
-## Where your code goes
-
-All of your work belongs in [`code/`](./code/). The repo ships with empty starter files that you can grow into your full solution.
-
-Suggested conventions:
-
-- Put your main runnable solution in `code/main.py`, or document your own entry point clearly.
-- Put evaluation code under `code/evaluation/` or an `evaluation/` folder included in your final `code.zip`.
-- Write final predictions to `output.csv`.
-
----
-
-## Quickstart
-
-Clone this repository:
+## How to Run
 
 ```bash
-git clone git@github.com:interviewstreet/hackerrank-orchestrate-june26.git
-cd hackerrank-orchestrate-june26
+# Prerequisites: Ollama installed + models pulled
+ollama pull moondream
+ollama pull gemma4:e4b
+pip install -r code/requirements.txt
+
+# Run pipeline
+python code/main.py
+# Output: output.csv
 ```
 
-You are free to use any language or runtime. Python, JavaScript, and TypeScript are all reasonable choices.
+## Key Decisions
 
----
-
-## Evaluation
-
-The evaluation report should include:
-
-- metrics on `dataset/sample_claims.csv`
-- at least two strategies, prompts, or model configurations compared
-- the final strategy used for `output.csv`
-- operational analysis covering model calls, token usage, image usage, approximate cost, runtime, and TPM/RPM considerations
-
----
-
-## Chat transcript logging
-
-This repo ships with an `AGENTS.md` that modern AI coding tools may read. It instructs the tool to append conversation turns to a shared log file:
-
-| Platform | Path |
-|---|---|
-| macOS / Linux | `$HOME/hackerrank_orchestrate/log.txt` |
-| Windows | `%USERPROFILE%\hackerrank_orchestrate\log.txt` |
-
-You will upload this log as your chat transcript at submission time. The chat transcript means your conversation with the AI coding tool you used to build the system. It is not the runtime logs, reasoning trace, or conversation history produced by the claim-verification agent you are building.
-
-If you use multiple AI tools, include the relevant conversation logs from all of them in the same transcript file. Separate each tool's section with a clear divider and label it with the tool name.
-
-Never paste secrets into the chat. If secrets are needed, use environment variables.
-
----
+- **Two-pass over single-pass**: moondream ignores JSON instructions when images are present in prompts. Separating description (free-form) from analysis (text-only JSON) lets each model do what it's good at.
+- **Local over cloud**: All three cloud providers' free credits exhausted. Local models are slower but cost $0 and have no rate limits.
+- **Image resizing**: Full-resolution images caused OOM on 4GB VRAM. Resizing to 384px max solved this.
+- **Endpoint choice**: Ollama's `/api/generate` produced garbage descriptions. Switching to OpenAI-compatible `/v1/chat/completions` fixed it.
 
 ## Submission
 
-Submit the following files as instructed by HackerRank:
-
-1. **Code zip**: zip your runnable solution, README, prompts/configs, and evaluation folder. Exclude virtualenvs, `node_modules`, build artifacts, and unnecessary generated files.
-2. **Predictions CSV**: your final `output.csv` for all rows in `dataset/claims.csv`.
-3. **Chat transcript**: the `log.txt` from the path in [Chat transcript logging](#chat-transcript-logging).
-
-Before submitting, confirm:
-
-- `output.csv` has one row per row in `dataset/claims.csv`.
-- `output.csv` has the exact required columns in the exact required order.
-- Your evaluation files are included in `code.zip`.
-
----
-
-## Judge interview
-
-After submission, the AI Judge may ask about your approach, implementation decisions, model usage, evaluation strategy, and how you used AI while building the solution.
-
-Be prepared to explain your solution in detail.
+- `output.csv` — 44 predictions (14 columns)
+- `code.zip` — runnable solution
+- `chat_transcript.md` — dev conversation
